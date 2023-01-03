@@ -10,28 +10,13 @@ import datetime
 import json 
 import random 
 import numpy as np
-
-
-def create_df(num=20, p=300):
-    df = pd.DataFrame({
-                    "retailer": [random.choice(["Mimovrste", "Amazon", "Microcenter"]) for _ in range(num)],
-                    "model": np.resize(["Dual OC", "Dual", "TUF GAming", "", "ROG Strix"], num),
-                    "manufacturer": np.resize(["ASUS", "Zotac"], num),
-                    "price": [round(p + random.uniform(-p*0.1, p*0.1), 2) for _ in range(num)],
-                    "date": pd.date_range(datetime.datetime.today(), periods=num).tolist()
-                })
-    return df
+import httpx
 
 
 def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
     """
-    Sample Dash application from Plotly: https://github.com/plotly/dash-hello-world/blob/master/app.py
+    Dash application using Plotly
     """
-
-    
-    dfs = {"GeForce RTX 3060": create_df(20, 300),
-            "GeForce RTX 3090": create_df(20, 1500)
-        }
 
     styles = {
         'pre': {
@@ -40,13 +25,49 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
         }
     }
 
+    body = """
+    query Query {
+        products {
+            name
+            prices {
+            price
+            retailer
+            manufacturer
+            date
+            }
+        }
+    }
+    """
+
+    try:
+        ip = os.environ["DATA_KEEPING_IP"]
+    except:
+        ip = "localhost:8000"
+    response = httpx.post(url=f"http://{ip}/graphql", json={"query":body})
+
+    print(response.status_code)
+
+    data = {x["name"]:pd.DataFrame.from_records(x["prices"]) for x in response.json()["data"]["products"]}
+    for k, v in list(data.items()):
+        if len(v) == 0:
+            del data[k]
+        else:
+            data[k] = v[v.price > 0]
+
+    if data is None:
+        return
+
+    response = httpx.get(f"http://{ip}/products/urls/")
+    url_data = pd.DataFrame.from_records(response.json())
+    #print(url_data)
+
+    ############
+
     external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
     app = dash.Dash(__name__, requests_pathname_prefix=requests_pathname_prefix, external_stylesheets=external_stylesheets)
 
     app.scripts.config.serve_locally = False
     dcc._js_dist[0]['external_url'] = 'https://cdn.plot.ly/plotly-basic-latest.min.js'
-
-    #fig = px.bar(df, x="Fruit", y="Amount", color="City", barmode="group")
 
     app.layout = html.Div([
         html.H1('GPU price comparison'),
@@ -54,8 +75,8 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
         html.H4("GPU model selector"),
         dcc.Dropdown(
             id="price-history-dropdown",
-            options=[{"label": n, "value": n} for n in list(dfs.keys())],
-            value=list(dfs.keys())[0]
+            options=[{"label": n, "value": n} for n in list(data.keys())],
+            value=list(data.keys())[0]
         ),
 
         html.Div(className="row", children=[
@@ -94,21 +115,33 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
         Output("table-comparison", "children"),
         Input("price-history-dropdown", "value"))
     def display_table(value):
-        df = dfs[value]
+        df = data[value].copy()
 
         # get last price
         last_pr = df[df.groupby("retailer")["date"].transform(max) == df["date"]]
         last_pr = last_pr[["price", "date", "retailer"]]
         last_pr.columns = ["last price", "last date", "retailer"]
         #last_pr.loc["last date"] = last_pr["last date"].apply(lambda x: x.date())
-        print(last_pr)
+        #print(last_pr)
 
         agg_df = df[df.groupby("retailer")["price"].transform(min) == df["price"]]
+        # if repetition use last
+        agg_df = agg_df[agg_df.groupby("retailer")["date"].transform(max) == agg_df["date"]]
+        agg_df = agg_df[["retailer", "price", "date"]]
         #agg_df.loc["date"] = agg_df["date"].apply(lambda x: x.date())
+        #print(agg_df)
 
         new_df = pd.merge(agg_df, last_pr, on="retailer")
-        new_df["date"] = new_df["date"].apply(lambda x: x.date())
-        new_df["last date"] = new_df["last date"].apply(lambda x: x.date())
+        if type(new_df["date"][new_df["date"].first_valid_index()]) is not pd.Timestamp:
+            new_df["date"] = new_df["date"].apply(lambda x: datetime.datetime.fromisoformat(x).date())
+        else:
+            new_df["date"] = new_df["date"].apply(lambda x: x.date())
+        
+        if type(new_df["last date"][new_df["last date"].first_valid_index()]) is not pd.Timestamp:
+            new_df["last date"] = new_df["last date"].apply(lambda x: datetime.datetime.fromisoformat(x).date())
+        else:
+            new_df["last date"] = new_df["last date"].apply(lambda x: x.date())
+
         new_df = new_df.sort_values("price")
         print(new_df)
         return dash_table.DataTable(
@@ -131,13 +164,20 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
         if hoverData is None:
             return dcc.Markdown("")
 
-        data = hoverData["points"][0]["customdata"]
-        m = dcc.Markdown(f"""
-            ###### {data[2]} {value} {data[1]}
-            - Retailer: {data[0]}
-            - Price: **{hoverData["points"][0]["y"]:.2f}€**
-            - Date: {hoverData["points"][0]["x"]}
-        """)
+        try:
+            hdata = hoverData["points"][0]["customdata"]
+            m = dcc.Markdown(f"""
+                ###### {hdata[1]} {value} 
+                - Retailer: {hdata[0]}
+                - Price: **{hoverData["points"][0]["y"]:.2f}€**
+                - Date: {hoverData["points"][0]["x"]}
+            """)
+        except:
+            m = dcc.Markdown(f"""
+                ###### {value} 
+                - Price: **{hoverData["points"][0]["y"]:.2f}€**
+                - Date: {hoverData["points"][0]["x"]}
+            """)
         return m
 
 
@@ -145,31 +185,47 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
         Output("hover-data-2", "children"),
         Input("price-history-dropdown", "value"))
     def display_min_price(value):
-        df = dfs[value]
+        df = data[value]
+        print("Getting link")
+        mdata = df.iloc[np.argmin(df["price"])]
+        print(mdata)
+        try:
+            link = url_data[url_data[["retailer", "manufacturer", "name"]].isin([mdata["retailer"], mdata["manufacturer"],value]).all(axis=1)]
+            link = link.iloc[0]
+            print(link)
+        except:
+            link = None
 
-        data = df.iloc[np.argmin(df["price"])]
-        m = dcc.Markdown(f"""
-            ###### {data["manufacturer"]} {value} {data["model"]}
-            - Retailer: {data["retailer"]}
-            - Price: **{data["price"]:.2f}€**
-            - Date: {data["date"]}
-        """) # todo add links?
-        return m
+        txt = f"""
+            ###### {mdata["manufacturer"]} {value}
+            - Retailer: {mdata["retailer"]}
+            - Price: **{mdata["price"]:.2f}€**
+            - Date: {mdata["date"]}
+        """
+
+        if link is not None:
+            txt = txt + f"""    - Link: [{link["manufacturer"]} {value} {link["model"]}]({link["url"]})"""
+
+        return dcc.Markdown(txt)
 
 
     @app.callback(
         Output("price-history", "figure"), 
         [Input("price-history-dropdown", "value")])
     def update_graph(selected_dropdown_value):
-        df = dfs[selected_dropdown_value]
+        df = data[selected_dropdown_value]
+
         min_price = df.iloc[np.argmin(df["price"])]
+
+        if type(df["date"][df["date"].first_valid_index()]) is not pd.Timestamp:
+            df["date"] = df["date"].apply(lambda x: datetime.datetime.fromisoformat(x))
 
         fig = px.scatter(df, x="date", y="price", hover_data=df, labels={"date": "Date", "price":"Price"}, range_y=[min_price["price"]*0.9, max(df["price"])*1.05], trendline="lowess")
         fig.update_yaxes(tickprefix="€")
         #fig.update_layout(yaxis=dict(tickmode="linear", tick0=0, dtick=100))
         #print(np.argmin(df["price"]))
         
-        print(min_price)
+        #print(min_price)
         fig.add_traces(go.Scatter(x=[min_price["date"]], y=[min_price["price"]], mode="markers", name="Minimal price", hoverinfo="skip"))
         fig.update_traces(marker=dict(size=12, color="lightgreen"), selector=dict(mode="markers", name="Minimal price"))
         #fig.update_layout(legend=dict(yanchor="bottom", y=0.05, xanchor="left", x=0.01))
@@ -180,7 +236,7 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
         Output("retailers-shown", "options"), Output("retailers-shown", "value"),
         Input("price-history-dropdown", "value"))
     def hide_retailers(value):
-        df = dfs[value]
+        df = data[value]
         opt = df["retailer"].unique()
         return (opt, opt)
 
@@ -189,13 +245,15 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
         Output("price-history-retailer", "figure"), 
         Input("price-history-dropdown", "value"), Input("retailers-shown", "value"))
     def update_graph_retailer(value, display_val):
-        df = dfs[value]
+        df = data[value]
         #print(display_val)
         df = df[df.retailer.isin(display_val)]
 
         min_price = df.iloc[np.argmin(df["price"])]
 
-        fig = px.line(df, x="date", y="price", color="retailer", hover_data=df, markers=True, labels={"date": "Date", "price":"Price", "retailer": "Retailer"}, range_y=[min_price["price"]*0.9, max(df["price"])*1.05])
+        if type(df["date"][df["date"].first_valid_index()]) is not pd.Timestamp:
+            df["date"] = df["date"].apply(lambda x: datetime.datetime.fromisoformat(x))
+        fig = px.line(df, x="date", y="price", color="retailer", hover_data=df, markers=True, labels={"date": "Date", "price": "Price", "retailer": "Retailer"}, range_y=[min_price["price"]*0.9, max(df["price"])*1.05])
         fig.update_yaxes(tickprefix="€")
         #fig.update_layout(yaxis=dict(tickmode="linear", tick0=0, dtick=100))
         #print(np.argmin(df["price"]))
@@ -205,43 +263,5 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
         fig.update_traces(marker=dict(size=12, color="lightgreen"), selector=dict(mode="markers"))
         #fig.update_layout(legend=dict(yanchor="middle"))
         return fig
-
-
-    # app.layout = html.Div([
-    #     html.H1('Stock Tickers'),
-    #     dcc.Dropdown(
-    #         id='my-dropdown',
-    #         options=[
-    #             {'label': 'Tesla', 'value': 'TSLA'},
-    #             {'label': 'Apple', 'value': 'AAPL'},
-    #             {'label': 'Coke', 'value': 'COKE'}
-    #         ],
-    #         value='TSLA'
-    #     ),
-    #     dcc.Graph(id='my-graph')
-    # ], className="container")
-
-    # @app.callback(Output('my-graph', 'figure'),
-    #               [Input('my-dropdown', 'value')])
-    # def update_graph(selected_dropdown_value):
-    #     dff = df[df['Stock'] == selected_dropdown_value]
-    #     return {
-    #         'data': [{
-    #             'x': dff.Date,
-    #             'y': dff.Close,
-    #             'line': {
-    #                 'width': 3,
-    #                 'shape': 'spline'
-    #             }
-    #         }],
-    #         'layout': {
-    #             'margin': {
-    #                 'l': 30,
-    #                 'r': 20,
-    #                 'b': 30,
-    #                 't': 20
-    #             }
-    #         }
-    #     }
 
     return app
