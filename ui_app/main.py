@@ -3,6 +3,8 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from starlette.templating import Jinja2Templates
 from starlette.staticfiles import StaticFiles
+from fastapi.middleware.wsgi import WSGIMiddleware
+from .dashapp import create_dash_app
 
 
 description = "todo"
@@ -12,6 +14,8 @@ app = FastAPI(title="UI", description=description)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+dash_app = create_dash_app(requests_pathname_prefix="/dash/")
+app.mount("/dash", WSGIMiddleware(dash_app.server))
 
 templates = Jinja2Templates(directory="templates")
 
@@ -24,7 +28,6 @@ async def read_item(request: Request):
 @app.get("/items/{id}", response_class=HTMLResponse)
 async def read_item(request: Request, id: str):
     return templates.TemplateResponse("item.html", {"request": request, "id": id})
-
 
 
 # sources - delete later
