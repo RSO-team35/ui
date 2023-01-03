@@ -8,6 +8,8 @@ import os
 import datetime
 import json 
 
+import httpx
+
 
 def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
     """
@@ -39,12 +41,34 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
         }
     }
 
+
+
     app = dash.Dash(__name__, requests_pathname_prefix=requests_pathname_prefix)
 
     app.scripts.config.serve_locally = False
     dcc._js_dist[0]['external_url'] = 'https://cdn.plot.ly/plotly-basic-latest.min.js'
 
     #fig = px.bar(df, x="Fruit", y="Amount", color="City", barmode="group")
+
+    ##graphql fetch example:##
+    body = """
+    query Query{
+        products{
+            name,
+            prices{
+                price
+            }
+        }
+    }
+
+    """
+
+    response = httpx.post(url=f"http://localhost:8000/graphql",json={"query":body})
+
+    print(response.status_code)
+    print(response.content)
+
+    ############
 
     app.layout = html.Div([
         html.H1('Primerjalnik cen'),
