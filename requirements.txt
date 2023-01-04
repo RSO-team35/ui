@@ -1,5 +1,4 @@
 fastapi[all] >= 0.86.0
-jinja2
 starlette
 pandas >= 1.5.2
 statsmodels >= 0.13.5

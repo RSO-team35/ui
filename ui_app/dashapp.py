@@ -61,6 +61,8 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
     url_data = pd.DataFrame.from_records(response.json())
     #print(url_data)
 
+    
+
     ############
 
     external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
@@ -76,39 +78,102 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
         dcc.Dropdown(
             id="price-history-dropdown",
             options=[{"label": n, "value": n} for n in list(data.keys())],
-            value=list(data.keys())[0]
+            value=list(data.keys())[0],
+            style={"margin-bottom": "60px"}
         ),
 
-        html.Div(className="row", children=[
-            
-            html.Div(className="one-half column", children=[
-                html.H4("Minimal price in recorded history"),
-                html.Div("Marked dot on graph", className="row"),
-                html.Pre(id="hover-data-2", style=styles["pre"])
-            ]),
+        dcc.Tabs(id="tabs-main", value="tab-analysis", children=[
+            dcc.Tab(label="Analysis", value="tab-analysis"),
+            dcc.Tab(label="Content", value="tab-content")
+        ]),
+        html.Div(id="tabs-content"),
 
-            html.Div(className="one-half column", children=[
-                html.H4("Currently selected details"),
-                html.Div("Hover over point on graph", className="row"),
-                html.Pre(id="hover-data", style=styles["pre"])
-            ]),
-        ], style={"margin-top": "30px"}),
-
-        dcc.Graph(id='price-history'),
-
-        html.Div(className="row", children=[
-            html.H4(children="Prices per store with details"),
-            html.Div(id="table-comparison", style={"text-align":"center"})
-        ], style={"text-align":"center", "margin-top": "60px"}),
-
-        html.Div(className="row", children=[
-            html.H4(children="Lowest prices per store"),
-            dcc.Checklist(id="retailers-shown", inline=True),
-            dcc.Graph(id='price-history-retailer'),
-        ], style={"text-align":"center", "margin-top": "60px", "margin-bottom": "100px"}),
         
-
     ], className="container")
+
+
+    @app.callback(
+        Output("tabs-content", "children"),
+        Input("tabs-main", "value"))
+    def create_tabs(tab):
+        if tab == "tab-analysis":
+            return html.Div([
+                html.Div(className="row", children=[
+            
+                    html.Div(className="one-half column", children=[
+                        html.H4("Minimal price in recorded history"),
+                        html.Div("Marked dot on graph", className="row"),
+                        html.Pre(id="hover-data-2", style=styles["pre"])
+                    ]),
+
+                    html.Div(className="one-half column", children=[
+                        html.H4("Currently selected details"),
+                        html.Div("Hover over point on graph", className="row"),
+                        html.Pre(id="hover-data", style=styles["pre"])
+                    ]),
+                ], style={"margin-top": "30px"}),
+
+                dcc.Graph(id='price-history'),
+
+                html.Div(className="row", children=[
+                    html.H4(children="Prices per store with details"),
+                    html.Div(id="table-comparison", style={"text-align":"center"})
+                ], style={"text-align":"center", "margin-top": "60px"}),
+
+                html.Div(className="row", children=[
+                    html.H4(children="Lowest prices per store"),
+                    dcc.Checklist(id="retailers-shown", inline=True),
+                    dcc.Graph(id='price-history-retailer'),
+                ], style={"text-align":"center", "margin-top": "60px", "margin-bottom": "100px"}),
+            ])
+        elif tab == "tab-content":
+            return html.Div([
+                #html.H4("Information about GPU"),
+                html.H2("Recent related news", style={"text-align":"center"}),
+                html.Div(id="news-box"),
+                dcc.Markdown("hehe")
+            ])
+
+
+    @app.callback(
+        Output("news-box", "children"),
+        Input("price-history-dropdown", "value"))
+    def display_news(product):
+        ch = []
+        try:
+            try:
+                ip = os.environ["DATA_NEWS_IP"]
+            except:
+                ip = "localhost:8003"
+            print(product)
+            news = httpx.get(f"http://{ip}/news/{product}/")
+            
+            news = pd.read_json(news)
+            print(news.loc[0])
+            
+            for lb, row in news.iterrows():
+                ch.append(create_box(row))
+                ch.append(html.Hr())
+        except:
+            ch.append(html.H4("No news found"))
+
+        return html.Div(ch)
+
+    def create_box(row):
+        return html.Div(className="row", children=[
+            html.Div(className="one-half column", children=[
+                html.A(html.H4(row["title"]), href=row["url"]),
+                html.Div(dcc.Markdown(f"""
+                    ###### Author: {row["author"]}
+                    ###### Published in: {row["source"]["name"]}
+                    {row["description"]}
+                """), style=styles["pre"])
+            ]),
+
+            html.Div(className="one-half column", children=[
+                html.Img(src=row["urlToImage"], style={"width":"400px"}),
+            ]),
+        ])
 
 
     @app.callback(
