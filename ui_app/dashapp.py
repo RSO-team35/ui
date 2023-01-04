@@ -1,5 +1,5 @@
 import dash
-from dash.dependencies import Input, Output
+from dash.dependencies import Input, Output, State
 from dash import dcc, html, dash_table
 import plotly.express as px
 import plotly.graph_objects as go
@@ -25,44 +25,13 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
         }
     }
 
-    body = """
-    query Query {
-        products {
-            name
-            prices {
-            price
-            retailer
-            manufacturer
-            date
-            }
-        }
-    }
-    """
-
     try:
         ip = os.environ["DATA_KEEPING_IP"]
     except:
         ip = "localhost:8000"
-    response = httpx.post(url=f"http://{ip}/graphql", json={"query":body})
-
-    print(response.status_code)
-
-    data = {x["name"]:pd.DataFrame.from_records(x["prices"]) for x in response.json()["data"]["products"]}
-    for k, v in list(data.items()):
-        if len(v) == 0:
-            del data[k]
-        else:
-            data[k] = v[v.price > 0]
-
-    if data is None:
-        return
 
     response = httpx.get(f"http://{ip}/products/urls/")
     url_data = pd.DataFrame.from_records(response.json())
-    #print(url_data)
-
-    
-
     ############
 
     external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
@@ -71,14 +40,56 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
     app.scripts.config.serve_locally = False
     dcc._js_dist[0]['external_url'] = 'https://cdn.plot.ly/plotly-basic-latest.min.js'
 
+    
+    def get_data(keys=False, val=None):
+        body = """
+        query Query {
+            products {
+                name
+                prices {
+                price
+                retailer
+                manufacturer
+                date
+                }
+            }
+        }
+        """
+
+        try:
+            ip = os.environ["DATA_KEEPING_IP"]
+        except:
+            ip = "localhost:8000"
+        response = httpx.post(url=f"http://{ip}/graphql", json={"query":body})
+
+        print(response.status_code)
+
+        data = {x["name"]:pd.DataFrame.from_records(x["prices"]) for x in response.json()["data"]["products"]}
+        for k, v in list(data.items()):
+            if len(v) == 0:
+                del data[k]
+            else:
+                data[k] = v[v.price > 0]
+
+        if data is None:
+            return
+
+        if keys:
+            return data.keys()
+
+        return data[val].to_dict()
+
+    keys = list(get_data(keys=True))
+
     app.layout = html.Div([
+        dcc.Store(id="store"),
         html.H1('GPU price comparison'),
 
         html.H4("GPU model selector"),
         dcc.Dropdown(
             id="price-history-dropdown",
-            options=[{"label": n, "value": n} for n in list(data.keys())],
-            value=list(data.keys())[0],
+            value=keys[0],
+            options=[{"label": n, "value": n} for n in keys],
             style={"margin-bottom": "60px"}
         ),
 
@@ -87,9 +98,15 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
             dcc.Tab(label="Content", value="tab-content")
         ]),
         html.Div(id="tabs-content"),
-
-        
     ], className="container")
+
+    @app.callback(
+        Output("store", "data"),
+        Input("price-history-dropdown", "value"))
+    def store_data(val):
+        dt = get_data(val=val)
+        print("HERE GETTING UPDATED DATA...")
+        return dt
 
 
     @app.callback(
@@ -178,9 +195,9 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
 
     @app.callback(
         Output("table-comparison", "children"),
-        Input("price-history-dropdown", "value"))
-    def display_table(value):
-        df = data[value].copy()
+        Input("price-history-dropdown", "value"), Input("store", "data"))
+    def display_table(value, data):
+        df = pd.DataFrame.from_dict(data)
 
         # get last price
         last_pr = df[df.groupby("retailer")["date"].transform(max) == df["date"]]
@@ -208,7 +225,7 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
             new_df["last date"] = new_df["last date"].apply(lambda x: x.date())
 
         new_df = new_df.sort_values("price")
-        print(new_df)
+        #print(new_df)
         return dash_table.DataTable(
             data=new_df.to_dict("records"), 
             columns=[{"id": c, "name": "Minimal price [EUR]" if c == "price" else ("Last recorded price [EUR]" if c == "last price" else c.capitalize())} for c in new_df.columns], 
@@ -248,12 +265,12 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
 
     @app.callback(
         Output("hover-data-2", "children"),
-        Input("price-history-dropdown", "value"))
-    def display_min_price(value):
-        df = data[value]
-        print("Getting link")
+        Input("price-history-dropdown", "value"), Input("store", "data"))
+    def display_min_price(value, data):
+        df = pd.DataFrame.from_dict(data)
+        #print("Getting link")
         mdata = df.iloc[np.argmin(df["price"])]
-        print(mdata)
+        #print(mdata)
         try:
             link = url_data[url_data[["retailer", "manufacturer", "name"]].isin([mdata["retailer"], mdata["manufacturer"],value]).all(axis=1)]
             link = link.iloc[0]
@@ -276,9 +293,9 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
 
     @app.callback(
         Output("price-history", "figure"), 
-        [Input("price-history-dropdown", "value")])
-    def update_graph(selected_dropdown_value):
-        df = data[selected_dropdown_value]
+        Input("price-history-dropdown", "value"), Input("store", "data"))
+    def update_graph(selected_dropdown_value, data):
+        df = pd.DataFrame.from_dict(data)
 
         min_price = df.iloc[np.argmin(df["price"])]
 
@@ -299,18 +316,18 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
 
     @app.callback(
         Output("retailers-shown", "options"), Output("retailers-shown", "value"),
-        Input("price-history-dropdown", "value"))
-    def hide_retailers(value):
-        df = data[value]
+        Input("price-history-dropdown", "value"), Input("store", "data"))
+    def hide_retailers(value, data):
+        df = pd.DataFrame.from_dict(data)
         opt = df["retailer"].unique()
         return (opt, opt)
 
 
     @app.callback(
         Output("price-history-retailer", "figure"), 
-        Input("price-history-dropdown", "value"), Input("retailers-shown", "value"))
-    def update_graph_retailer(value, display_val):
-        df = data[value]
+        Input("price-history-dropdown", "value"), Input("retailers-shown", "value"), Input("store", "data"))
+    def update_graph_retailer(value, display_val, data):
+        df = pd.DataFrame.from_dict(data)
         #print(display_val)
         df = df[df.retailer.isin(display_val)]
 
