@@ -3,3 +3,4 @@ starlette
 pandas >= 1.5.2
 statsmodels >= 0.13.5
 dash >= 2.7.1
+circuitbreaker

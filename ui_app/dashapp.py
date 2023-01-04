@@ -11,6 +11,20 @@ import json
 import random 
 import numpy as np
 import httpx
+from circuitbreaker import circuit
+
+
+@circuit(failure_threshold=2)
+def get_news(product):
+    try:
+        ip = os.environ["DATA_NEWS_IP"]
+    except:
+        ip = "localhost:8003"
+    print(product)
+    news = httpx.get(f"http://{ip}/news/{product}/")
+    
+    news = pd.read_json(news)
+    return news
 
 
 def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
@@ -30,6 +44,7 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
     except:
         ip = "localhost:8000"
 
+    
     response = httpx.get(f"http://{ip}/products/urls/")
     url_data = pd.DataFrame.from_records(response.json())
     ############
@@ -60,7 +75,11 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
             ip = os.environ["DATA_KEEPING_IP"]
         except:
             ip = "localhost:8000"
-        response = httpx.post(url=f"http://{ip}/graphql", json={"query":body})
+
+        try:
+            response = httpx.post(url=f"http://{ip}/graphql", json={"query":body})
+        except ConnectionError:
+            print("Connection error - data keeping dead :(")
 
         print(response.status_code)
 
@@ -158,20 +177,14 @@ def create_dash_app(requests_pathname_prefix: str = None) -> dash.Dash:
     def display_news(product):
         ch = []
         try:
-            try:
-                ip = os.environ["DATA_NEWS_IP"]
-            except:
-                ip = "localhost:8003"
-            print(product)
-            news = httpx.get(f"http://{ip}/news/{product}/")
-            
-            news = pd.read_json(news)
-            print(news.loc[0])
+            news = get_news(product)
+            #print(news.loc[0])
             
             for lb, row in news.iterrows():
                 ch.append(create_box(row))
                 ch.append(html.Hr())
-        except:
+        except Exception as e:
+            print(e)
             ch.append(html.H4("No news found"))
 
         return html.Div(ch)
